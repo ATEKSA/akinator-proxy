@@ -8,14 +8,12 @@ app.get('/', (req, res) => {
   res.json({ 
     status: "Akinator Proxy is running!",
     hasKey: !!API_KEY,
-    keyPreview: API_KEY ? API_KEY.substring(0, 10) + "..." : "NOT SET"
+    model: "llama-3.3-70b-versatile"
   });
 });
 
 app.post('/ask', async (req, res) => {
   try {
-
-    // Проверяем ключ
     if (!API_KEY) {
       return res.status(500).json({ 
         type: "error", 
@@ -25,7 +23,6 @@ app.post('/ask', async (req, res) => {
 
     const { messages, lang } = req.body;
 
-    // Проверяем тело запроса
     if (!messages || !Array.isArray(messages)) {
       return res.status(400).json({ 
         type: "error", 
@@ -83,7 +80,7 @@ app.post('/ask', async (req, res) => {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          model: "llama3-8b-8192",
+          model: "llama-3.3-70b-versatile",  // ✅ Новая модель
           messages: allMessages,
           temperature: 0.3,
           max_tokens: 200
@@ -91,7 +88,6 @@ app.post('/ask', async (req, res) => {
       }
     );
 
-    // Проверяем ответ от Groq
     const responseText = await response.text();
     console.log("Groq status:", response.status);
     console.log("Groq response:", responseText.substring(0, 200));
@@ -99,7 +95,7 @@ app.post('/ask', async (req, res) => {
     if (!response.ok) {
       return res.status(500).json({ 
         type: "error", 
-        value: "Groq API error: " + response.status + " " + responseText.substring(0, 100)
+        value: "Groq API error: " + response.status
       });
     }
 
