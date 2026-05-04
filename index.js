@@ -4,38 +4,73 @@ app.use(express.json());
 
 const API_KEY = process.env.OPENROUTER_API_KEY;
 
+// Актуальные бесплатные модели OpenRouter (2025)
 const MODELS = [
-  "meta-llama/llama-3.1-8b-instruct:free",
   "meta-llama/llama-3.2-3b-instruct:free",
-  "google/gemma-2-9b-it:free",
-  "mistralai/mistral-7b-instruct:free",
-  "qwen/qwen-2-7b-instruct:free",
-  "qwen/qwen-2-72b-instruct:free",
-  "microsoft/phi-3-mini-128k-instruct:free",
-  "huggingfaceh4/zephyr-7b-beta:free",
-  "openchat/openchat-7b:free",
-  "gryphe/mythomist-7b:free",
+  "meta-llama/llama-3.2-1b-instruct:free",
+  "meta-llama/llama-4-scout:free",
+  "meta-llama/llama-4-maverick:free",
+  "google/gemini-2.0-flash-exp:free",
+  "google/gemini-2.5-pro-exp-03-25:free",
+  "deepseek/deepseek-chat:free",
+  "deepseek/deepseek-r1:free",
+  "deepseek/deepseek-v3-base:free",
+  "mistralai/mistral-small-3.1-24b-instruct:free",
+  "qwen/qwen2.5-vl-3b-instruct:free",
+  "qwen/qwen2.5-vl-72b-instruct:free",
+  "nvidia/llama-3.1-nemotron-ultra-253b-v1:free",
+  "tngtech/deepseek-r1t-chimera:free",
+  "shisa-ai/shisa-v2-llama3.3-70b:free",
 ];
 
 let modelIndex = 0;
+let workingModel = null; // Кэшируем рабочую модель
+
+async function fetchAvailableModels() {
+  try {
+    const res = await fetch("https://openrouter.ai/api/v1/models", {
+      headers: { "Authorization": `Bearer ${API_KEY}` }
+    });
+    const data = await res.json();
+    const freeModels = data.data
+      .filter(m => m.id.includes(":free"))
+      .map(m => m.id);
+    console.log(`Found ${freeModels.length} free models`);
+    if (freeModels.length > 0) {
+      MODELS.length = 0;
+      freeModels.forEach(m => MODELS.push(m));
+    }
+  } catch (e) {
+    console.log("Could not fetch models:", e.message);
+  }
+}
+
+// Обновляем список моделей при старте
+fetchAvailableModels();
 
 app.get('/', (req, res) => {
   res.json({
     status: "Akinator Unlimited!",
-    currentModel: MODELS[modelIndex],
-    totalModels: MODELS.length
+    workingModel: workingModel || "searching...",
+    totalModels: MODELS.length,
+    models: MODELS.slice(0, 5)
   });
 });
 
-async function callAI(apiKey, model, messages) {
+app.get('/models', async (req, res) => {
+  await fetchAvailableModels();
+  res.json({ models: MODELS });
+});
+
+async function callModel(model, messages) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15000); // 15 сек таймаут
+  const timeout = setTimeout(() => controller.abort(), 20000);
 
   try {
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${apiKey}`,
+        "Authorization": `Bearer ${API_KEY}`,
         "Content-Type": "application/json",
         "HTTP-Referer": "https://akinator-proxy.onrender.com",
         "X-Title": "Roblox Akinator"
@@ -44,8 +79,7 @@ async function callAI(apiKey, model, messages) {
         model: model,
         messages: messages,
         temperature: 0.2,
-        max_tokens: 80,
-        route: "fallback"  // OpenRouter сам переключит если модель недоступна
+        max_tokens: 100
       }),
       signal: controller.signal
     });
@@ -90,89 +124,90 @@ app.post('/ask', async (req, res) => {
 Language: ${langRule}
 Rules:
 - ONE question per turn.
-- QUESTION:text — to ask
-- GUESS:name — to guess
-- Nothing else. No extra text ever.
-- Only REAL characters. Never invent.
+- QUESTION:text — to ask a question
+- GUESS:name — to guess the character
+- Output ONLY one line. Nothing else ever.
+- Only REAL characters. NEVER invent.
 - 80%+ sure before guessing.
-- Wrong guess = ask more questions.
-Universes: Anime(Naruto/OnePiece/BlueLock/AOT/DemonSlayer/JJK/MHA/DeathNote), Games(Minecraft/Roblox/GTA/Fortnite/FNAF/Genshin), Movies(Marvel/DC/HarryPotter/StarWars/Disney), RussianCartoons(Барбоскины:Роза,Лиза,Гена,Дружок,Малыш/МашаИМедведь/Смешарики/Фиксики/Лунтик/ТриКота/Простоквашино/Чебурашка/НуПогоди), RealPeople(YouTubers/athletes/musicians)`;
+- Wrong guess = keep asking questions.
+Universes: Anime(Naruto/OnePiece/BlueLock/AOT/DemonSlayer/JJK/MHA/DeathNote/Bleach/HxH), Games(Minecraft/Roblox/GTA/Fortnite/FNAF/Genshin/BrawlStars), Movies(Marvel/DC/HarryPotter/StarWars/Disney/Pixar), RussianCartoons(Барбоскины:Роза,Лиза,Гена,Дружок,Малыш/МашаИМедведь/Смешарики/Фиксики/Лунтик/ТриКота/Простоквашино/Чебурашка/НуПогоди), RealPeople(YouTubers/athletes/musicians/politicians)`;
 
     const allMessages = [
       { role: "system", content: systemPrompt },
       ...messages
     ];
 
-    // Пробуем все модели по кругу
-    for (let i = 0; i < MODELS.length; i++) {
-      const model = MODELS[modelIndex];
-      console.log(`[${i+1}/${MODELS.length}] Trying: ${model}`);
+    // Если есть рабочая модель — пробуем её первой
+    const modelsToTry = workingModel
+      ? [workingModel, ...MODELS.filter(m => m !== workingModel)]
+      : MODELS;
+
+    for (let i = 0; i < modelsToTry.length; i++) {
+      const model = modelsToTry[i];
+      console.log(`[${i+1}/${modelsToTry.length}] Trying: ${model}`);
 
       try {
-        const response = await callAI(API_KEY, model, allMessages);
+        const response = await callModel(model, allMessages);
         const responseText = await response.text();
-
         console.log(`Status: ${response.status}`);
 
-        if (response.status === 200) {
-          let data;
-          try {
-            data = JSON.parse(responseText);
-          } catch {
-            console.log("JSON parse failed, trying next model");
-            modelIndex = (modelIndex + 1) % MODELS.length;
-            continue;
-          }
-
-          if (!data.choices || !data.choices[0] || !data.choices[0].message) {
-            console.log("No valid response, trying next");
-            modelIndex = (modelIndex + 1) % MODELS.length;
-            continue;
-          }
-
-          const reply = data.choices[0].message.content.trim();
-          console.log("AI:", reply);
-
-          if (!reply || reply.length < 3) {
-            modelIndex = (modelIndex + 1) % MODELS.length;
-            continue;
-          }
-
-          let result = {};
-          const guessMatch = reply.match(/GUESS:\s*(.+)/i);
-          const questionMatch = reply.match(/QUESTION:\s*(.+)/i);
-
-          if (guessMatch) {
-            result.type = "guess";
-            result.value = guessMatch[1].trim();
-          } else if (questionMatch) {
-            result.type = "question";
-            result.value = questionMatch[1].trim();
-          } else {
-            // ИИ ответил не по формату — берём как есть
-            result.type = "question";
-            result.value = reply.replace(/^(QUESTION:|GUESS:)/i, "").trim();
-          }
-
-          // Успех! Запоминаем рабочую модель
-          console.log(`✅ Success with: ${model}`);
-          return res.json(result);
+        if (response.status !== 200) {
+          console.log(`❌ ${model} → ${response.status}`);
+          if (model === workingModel) workingModel = null;
+          continue;
         }
 
-        // Не 200 — пробуем следующую
-        console.log(`Model ${model} returned ${response.status}, switching...`);
-        modelIndex = (modelIndex + 1) % MODELS.length;
+        let data;
+        try {
+          data = JSON.parse(responseText);
+        } catch {
+          console.log("JSON parse failed");
+          continue;
+        }
 
-      } catch (fetchError) {
-        console.log(`Model ${model} timeout/error: ${fetchError.message}`);
-        modelIndex = (modelIndex + 1) % MODELS.length;
+        if (!data.choices?.[0]?.message?.content) {
+          console.log("Empty response");
+          continue;
+        }
+
+        const reply = data.choices[0].message.content.trim();
+        console.log("✅ AI:", reply);
+
+        if (!reply || reply.length < 3) continue;
+
+        // Кэшируем рабочую модель
+        workingModel = model;
+
+        let result = {};
+        const guessMatch = reply.match(/GUESS:\s*(.+)/i);
+        const questionMatch = reply.match(/QUESTION:\s*(.+)/i);
+
+        if (guessMatch) {
+          result.type = "guess";
+          result.value = guessMatch[1].trim();
+        } else if (questionMatch) {
+          result.type = "question";
+          result.value = questionMatch[1].trim();
+        } else {
+          result.type = "question";
+          result.value = reply.replace(/^(QUESTION:|GUESS:)/i, "").trim();
+        }
+
+        return res.json(result);
+
+      } catch (err) {
+        console.log(`❌ ${model} timeout: ${err.message}`);
+        if (model === workingModel) workingModel = null;
+        continue;
       }
     }
 
-    // Все модели не ответили
+    // Обновляем список моделей на следующий раз
+    fetchAvailableModels();
+
     return res.status(503).json({
       type: "error",
-      value: "All models unavailable"
+      value: "All models unavailable, try again"
     });
 
   } catch (error) {
@@ -184,5 +219,4 @@ Universes: Anime(Naruto/OnePiece/BlueLock/AOT/DemonSlayer/JJK/MHA/DeathNote), Ga
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Akinator Unlimited on port ${PORT}`);
-  console.log(`${MODELS.length} models available`);
 });
