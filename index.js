@@ -4,9 +4,34 @@ app.use(express.json());
 
 const API_KEY = process.env.GROQ_API_KEY;
 
+app.get('/', (req, res) => {
+  res.json({ 
+    status: "Akinator Proxy is running!",
+    hasKey: !!API_KEY,
+    keyPreview: API_KEY ? API_KEY.substring(0, 10) + "..." : "NOT SET"
+  });
+});
+
 app.post('/ask', async (req, res) => {
   try {
+
+    // Проверяем ключ
+    if (!API_KEY) {
+      return res.status(500).json({ 
+        type: "error", 
+        value: "GROQ_API_KEY is not set!" 
+      });
+    }
+
     const { messages, lang } = req.body;
+
+    // Проверяем тело запроса
+    if (!messages || !Array.isArray(messages)) {
+      return res.status(400).json({ 
+        type: "error", 
+        value: "Invalid request body" 
+      });
+    }
 
     const langInstructions = {
       "en": "Communicate ONLY in English.",
@@ -42,25 +67,46 @@ app.post('/ask', async (req, res) => {
 
     const allMessages = [
       { role: "system", content: systemPrompt },
-      ...(messages || [])
+      ...messages
     ];
 
-    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${API_KEY}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model: "llama3-8b-8192",
-        messages: allMessages,
-        temperature: 0.3,
-        max_tokens: 200
-      })
-    });
+    console.log("Sending request to Groq...");
+    console.log("Lang:", lang);
+    console.log("Messages count:", messages.length);
 
-    const data = await response.json();
+    const response = await fetch(
+      "https://api.groq.com/openai/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${API_KEY}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: "llama3-8b-8192",
+          messages: allMessages,
+          temperature: 0.3,
+          max_tokens: 200
+        })
+      }
+    );
+
+    // Проверяем ответ от Groq
+    const responseText = await response.text();
+    console.log("Groq status:", response.status);
+    console.log("Groq response:", responseText.substring(0, 200));
+
+    if (!response.ok) {
+      return res.status(500).json({ 
+        type: "error", 
+        value: "Groq API error: " + response.status + " " + responseText.substring(0, 100)
+      });
+    }
+
+    const data = JSON.parse(responseText);
     const reply = data.choices[0].message.content.trim();
+
+    console.log("AI reply:", reply);
 
     let result = {};
 
@@ -75,20 +121,20 @@ app.post('/ask', async (req, res) => {
       result.value = reply;
     }
 
+    console.log("Sending result:", result);
     res.json(result);
 
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ type: "error", value: error.message });
+    console.error("Server error:", error);
+    res.status(500).json({ 
+      type: "error", 
+      value: error.message 
+    });
   }
-});
-
-// Health check
-app.get('/', (req, res) => {
-  res.json({ status: "Akinator Proxy is running!" });
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`Akinator Proxy running on port ${PORT}`);
+  console.log(`API Key set: ${!!API_KEY}`);
 });
