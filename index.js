@@ -2,16 +2,30 @@ const express = require('express');
 const app = express();
 app.use(express.json());
 
-const API_KEY = process.env.GROQ_API_KEY;
+const API_KEY = process.env.OPENROUTER_API_KEY;
+
+// Бесплатные модели — ротация если одна не работает
+const FREE_MODELS = [
+  "meta-llama/llama-3.1-8b-instruct:free",
+  "google/gemma-2-9b-it:free",
+  "mistralai/mistral-7b-instruct:free",
+  "qwen/qwen-2-7b-instruct:free",
+];
+
+let modelIndex = 0;
 
 app.get('/', (req, res) => {
-  res.json({ status: "Akinator v5.1 running!" });
+  res.json({ 
+    status: "Akinator Unlimited running!",
+    provider: "OpenRouter",
+    model: FREE_MODELS[modelIndex]
+  });
 });
 
 app.post('/ask', async (req, res) => {
   try {
     if (!API_KEY) {
-      return res.status(500).json({ type: "error", value: "API KEY missing" });
+      return res.status(500).json({ type: "error", value: "OPENROUTER_API_KEY not set" });
     }
 
     const { messages, lang } = req.body;
@@ -20,145 +34,127 @@ app.post('/ask', async (req, res) => {
       return res.status(400).json({ type: "error", value: "Bad request" });
     }
 
-    const langInstructions = {
-      "en": "You MUST communicate ONLY in English.",
-      "ru": "Ты ОБЯЗАН общаться ТОЛЬКО на русском языке. Все вопросы и догадки пиши на русском.",
-      "es": "DEBES comunicarte SOLO en español.",
-      "pt": "Você DEVE se comunicar APENAS em português.",
-      "fr": "Tu DOIS communiquer UNIQUEMENT en français.",
-      "de": "Du MUSST NUR auf Deutsch kommunizieren.",
-      "ja": "必ず日本語のみで会話してください。",
-      "zh": "你必须只用中文交流。",
-      "ko": "반드시 한국어로만 대화하세요.",
-      "tr": "SADECE Türkçe iletişim kurmalısın.",
-      "ar": "يجب أن تتواصل باللغة العربية فقط."
+    const langMap = {
+      "en": "English only.",
+      "ru": "Только русский язык.",
+      "es": "Solo español.",
+      "pt": "Só português.",
+      "fr": "Français seulement.",
+      "de": "Nur Deutsch.",
+      "ja": "日本語のみ。",
+      "zh": "只用中文。",
+      "ko": "한국어만.",
+      "tr": "Sadece Türkçe.",
+      "ar": "عربي فقط."
     };
 
-    const langRule = langInstructions[lang] || langInstructions["en"];
+    const langRule = langMap[lang] || langMap["en"];
 
-    const systemPrompt = `You are Akinator — the legendary genie who guesses characters.
-
-${langRule}
-
-CRITICAL RULES:
-1. NEVER invent or make up characters that don't exist.
-2. Only guess REAL characters from REAL shows, movies, games, anime, cartoons, books, or real life.
-3. If you are not sure, keep asking questions instead of guessing randomly.
-4. Ask ONE yes/no question at a time.
-5. You have 25 questions maximum.
-
-YOUR STRATEGY:
-- Questions 1-3: Real or fictional? Male/female? From what medium? (cartoon, anime, movie, game, real life)
-- Questions 4-6: What country/culture is the character from? (Russian, American, Japanese, etc.)
-- Questions 7-10: What franchise/show/movie? What era?
-- Questions 11+: Specific details about the character
-
-KNOWLEDGE BASE — you MUST know these:
-
-RUSSIAN CARTOONS (Русские мультфильмы):
-- Барбоскины: Роза, Лиза, Гена, Дружок, Малыш, Мама, Папа, Тимоха
-- Маша и Медведь: Маша, Медведь, Панда, Волки, Тигр, Пингвинёнок
-- Смешарики: Крош, Ёжик, Бараш, Нюша, Копатыч, Лосяш, Кар-Карыч, Пин, Совунья, Биби
-- Фиксики: Нолик, Симка, Папус, Мася, Дедус, Файер, Игрек, Верта, Шпуля
-- Лунтик: Лунтик, Кузя, Мила, Пчелёнок, Вупсень, Пупсень, Баба Капа, Генерал Шер
-- Три кота: Коржик, Компот, Карамелька, Мама, Папа
-- Ну погоди: Волк, Заяц
-- Простоквашино: Дядя Фёдор, Кот Матроскин, Шарик, Почтальон Печкин
-- Чебурашка и Крокодил Гена: Чебурашка, Крокодил Гена, Шапокляк
-- Бременские музыканты: Трубадур, Принцесса, Осёл, Пёс, Кот, Петух
-- Винни-Пух (советский): Винни-Пух, Пятачок, Иа-Иа, Сова, Кролик
-- Незнайка: Незнайка, Знайка, Пилюлькин, Винтик, Шпунтик
-- Леди Баг и Супер-Кот: Маринетт, Адриан, Леди Баг, Супер-Кот
-- Щенячий патруль: Райдер, Маршал, Крепыш, Гонщик, Скай, Зума, Рокки, Эверест
-- Холодное сердце: Эльза, Анна, Олаф, Кристофф, Свен, Ханс
-- Губка Боб: Губка Боб, Патрик, Сквидвард, Мистер Крабс, Сэнди, Планктон, Гэри
-- Гравити Фолз: Диппер, Мэйбл, Стэн, Венди, Зус, Билл Шифр
-
-ANIME:
-- Naruto/Boruto: Naruto, Sasuke, Sakura, Kakashi, Itachi, Hinata, Boruto, etc.
-- One Piece: Luffy, Zoro, Nami, Sanji, etc.
-- Dragon Ball: Goku, Vegeta, Gohan, Frieza, etc.
-- Blue Lock: Isagi Yoichi, Rin Itoshi, Nagi Seishiro, Bachira Meguru, Chigiri Hyoma, Barou Shouei, Kunigami, Reo, Ego Jinpachi
-- Attack on Titan: Eren, Mikasa, Levi, Armin, etc.
-- Demon Slayer: Tanjiro, Nezuko, Zenitsu, Inosuke, etc.
-- Jujutsu Kaisen: Yuji, Gojo, Megumi, Nobara, Sukuna, etc.
-- Death Note: Light, L, Misa, Ryuk, etc.
-- My Hero Academia: Deku, Bakugo, Todoroki, All Might, etc.
-- One Punch Man: Saitama, Genos, etc.
-- Tokyo Ghoul: Kaneki, Touka, etc.
-- Spy x Family: Loid, Yor, Anya, etc.
-- Chainsaw Man: Denji, Makima, Power, Aki, etc.
-
-GAMES: Mario, Sonic, Minecraft Steve, Roblox characters, Fortnite, GTA, Undertale, FNAF, Brawl Stars, Genshin Impact, etc.
-
-MOVIES/TV: Marvel, DC, Harry Potter, Star Wars, Disney, Pixar, etc.
-
-REAL PEOPLE: YouTubers, streamers, athletes, musicians, politicians, etc.
-
-RESPONSE FORMAT (STRICT — NO EXCEPTIONS):
-- To ask: QUESTION:Your question
-- To guess: GUESS:Character Name
-- Output ONLY one line. Nothing else. No explanations.
-
-GUESSING RULES:
-- Be at least 80% confident before guessing.
-- If wrong, ask MORE questions. Don't guess randomly.
-- After 2 wrong guesses, ask at least 5 more questions before guessing again.
-- NEVER guess a character you just made up. If unsure, ASK MORE QUESTIONS.`;
+    const systemPrompt = `You are Akinator. Guess the character by asking yes/no questions.
+Language rule: ${langRule}
+Rules:
+- ONE question per turn.
+- Format for question: QUESTION:text
+- Format for guess: GUESS:name
+- NEVER output anything else. No explanations.
+- Only guess REAL existing characters. NEVER invent.
+- 80%+ confidence before guessing.
+- If wrong guess, ask more questions before guessing again.
+Known universes: 
+Anime: Naruto, One Piece, Dragon Ball, Blue Lock, Attack on Titan, Demon Slayer, JJK, MHA, Death Note, One Punch Man, Spy x Family, Chainsaw Man, Tokyo Ghoul, Bleach, HxH, FMA, SAO, Re:Zero
+Games: Minecraft, Roblox, GTA, Fortnite, Among Us, FNAF, Undertale, Genshin Impact, Brawl Stars, Clash Royale
+Movies/TV: Marvel, DC, Harry Potter, Star Wars, Disney, Pixar, Shrek, SpongeBob, Gravity Falls
+Russian cartoons: Барбоскины (Роза, Лиза, Гена, Дружок, Малыш, Мама, Папа), Маша и Медведь, Смешарики (Крош, Ёжик, Нюша, Бараш, Копатыч, Лосяш), Фиксики (Нолик, Симка), Лунтик, Три кота, Простоквашино (Матроскин, Шарик, Дядя Фёдор), Чебурашка, Ну погоди
+Real people: YouTubers, athletes, musicians, politicians, streamers`;
 
     const allMessages = [
       { role: "system", content: systemPrompt },
       ...messages
     ];
 
-    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${API_KEY}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model: "llama-3.3-70b-versatile",
-        messages: allMessages,
-        temperature: 0.15,
-        max_tokens: 150,
-        top_p: 0.85
-      })
+    // Пробуем модели по очереди
+    let lastError = null;
+
+    for (let attempt = 0; attempt < FREE_MODELS.length; attempt++) {
+      const model = FREE_MODELS[modelIndex];
+      console.log(`Trying model: ${model}`);
+
+      const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${API_KEY}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": "https://akinator-proxy.onrender.com",
+          "X-Title": "Roblox Akinator"
+        },
+        body: JSON.stringify({
+          model: model,
+          messages: allMessages,
+          temperature: 0.2,
+          max_tokens: 80
+        })
+      });
+
+      const responseText = await response.text();
+      console.log(`Status: ${response.status}`);
+
+      // Если модель недоступна — пробуем следующую
+      if (response.status === 429 || response.status === 503 || response.status === 502) {
+        console.log(`Model ${model} unavailable, switching...`);
+        modelIndex = (modelIndex + 1) % FREE_MODELS.length;
+        lastError = responseText;
+        continue;
+      }
+
+      if (!response.ok) {
+        console.error("Error:", response.status, responseText.substring(0, 200));
+        modelIndex = (modelIndex + 1) % FREE_MODELS.length;
+        continue;
+      }
+
+      const data = JSON.parse(responseText);
+      
+      if (!data.choices || !data.choices[0]) {
+        console.error("No choices in response");
+        modelIndex = (modelIndex + 1) % FREE_MODELS.length;
+        continue;
+      }
+
+      const reply = data.choices[0].message.content.trim();
+      console.log("AI reply:", reply);
+
+      let result = {};
+      const guessMatch = reply.match(/GUESS:\s*(.+)/i);
+      const questionMatch = reply.match(/QUESTION:\s*(.+)/i);
+
+      if (guessMatch) {
+        result.type = "guess";
+        result.value = guessMatch[1].trim();
+      } else if (questionMatch) {
+        result.type = "question";
+        result.value = questionMatch[1].trim();
+      } else {
+        result.type = "question";
+        result.value = reply.replace(/^(QUESTION:|GUESS:)/i, "").trim();
+      }
+
+      return res.json(result);
+    }
+
+    // Все модели недоступны
+    return res.status(503).json({
+      type: "error",
+      value: "All models unavailable, try again later"
     });
 
-    const responseText = await response.text();
-
-    if (!response.ok) {
-      console.error("Groq error:", response.status, responseText.substring(0, 200));
-      return res.status(500).json({ type: "error", value: "AI error" });
-    }
-
-    const data = JSON.parse(responseText);
-    const reply = data.choices[0].message.content.trim();
-    console.log("AI:", reply);
-
-    let result = {};
-    const guessMatch = reply.match(/GUESS:\s*(.+)/i);
-    const questionMatch = reply.match(/QUESTION:\s*(.+)/i);
-
-    if (guessMatch) {
-      result.type = "guess";
-      result.value = guessMatch[1].trim();
-    } else if (questionMatch) {
-      result.type = "question";
-      result.value = questionMatch[1].trim();
-    } else {
-      result.type = "question";
-      result.value = reply.replace(/^(QUESTION:|GUESS:)/i, "").trim();
-    }
-
-    res.json(result);
-
   } catch (error) {
-    console.error("Error:", error.message);
+    console.error("Server error:", error.message);
     res.status(500).json({ type: "error", value: error.message });
   }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Akinator v5.1 on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Akinator Unlimited on port ${PORT}`);
+  console.log(`Starting with model: ${FREE_MODELS[0]}`);
+});
