@@ -2,138 +2,154 @@ const express = require('express');
 const app = express();
 app.use(express.json());
 
-const API_KEY = process.env.OPENROUTER_API_KEY;
+const GROQ_KEYS = [
+  process.env.GROQ_KEY_1,
+  process.env.GROQ_KEY_2,
+  process.env.GROQ_KEY_3,
+].filter(Boolean);
 
-// АКТУАЛЬНЫЕ бесплатные модели (2025, pricing: 0/0)
-const MODELS = [
-  "openrouter/owl-alpha",
-  "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
-  "poolside/laguna-xs.2:free",
-  "poolside/laguna-m.1:free",
-  "inclusionai/ling-2.6-1t:free",
-  "tencent/hy3-preview:free",
-];
+let keyIndex = 0;
+function getKey() {
+  const key = GROQ_KEYS[keyIndex % GROQ_KEYS.length];
+  keyIndex++;
+  return key;
+}
 
-let workingModel = null;
+// Поиск картинки персонажа через Wikipedia API
+async function findCharacterImage(name) {
+  try {
+    const searchUrl = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(name)}`;
+    const res = await fetch(searchUrl);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.thumbnail && data.thumbnail.source) {
+        return data.thumbnail.source;
+      }
+    }
+    // Пробуем поиск
+    const searchUrl2 = `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(name)}&format=json&srlimit=1`;
+    const res2 = await fetch(searchUrl2);
+    if (res2.ok) {
+      const data2 = await res2.json();
+      if (data2.query?.search?.[0]) {
+        const pageTitle = data2.query.search[0].title;
+        const pageUrl = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(pageTitle)}`;
+        const res3 = await fetch(pageUrl);
+        if (res3.ok) {
+          const data3 = await res3.json();
+          if (data3.thumbnail?.source) return data3.thumbnail.source;
+        }
+      }
+    }
+  } catch(e) {
+    console.log("Image search error:", e.message);
+  }
+  return null;
+}
 
 app.get('/', (req, res) => {
-  res.json({
-    status: "Akinator Unlimited!",
-    workingModel: workingModel || "searching...",
-    totalModels: MODELS.length
-  });
+  res.json({ status: "Akinator v8.0 Luxury", keys: GROQ_KEYS.length });
 });
 
-async function callModel(model, messages) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 25000);
-
+// Эндпоинт для поиска картинки
+app.post('/image', async (req, res) => {
   try {
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${API_KEY}`,
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://akinator-proxy.onrender.com",
-        "X-Title": "Roblox Akinator"
-      },
-      body: JSON.stringify({
-        model: model,
-        messages: messages,
-        temperature: 0.2,
-        max_tokens: 100
-      }),
-      signal: controller.signal
-    });
-
-    clearTimeout(timeout);
-    return response;
-  } catch (e) {
-    clearTimeout(timeout);
-    throw e;
+    const { name } = req.body;
+    const imageUrl = await findCharacterImage(name || "");
+    res.json({ image: imageUrl });
+  } catch(e) {
+    res.json({ image: null });
   }
-}
+});
+
+const langMap = {
+  "en": "You MUST respond ONLY in English.",
+  "ru": "Ты ОБЯЗАН отвечать ТОЛЬКО на русском языке.",
+  "es": "Debes responder SOLO en español.",
+  "pt": "Você deve responder APENAS em português.",
+  "fr": "Tu dois répondre UNIQUEMENT en français.",
+  "de": "Du musst NUR auf Deutsch antworten.",
+  "tr": "SADECE Türkçe yanıt vermelisin.",
+  "ar": "يجب أن تجيب باللغة العربية فقط."
+};
 
 app.post('/ask', async (req, res) => {
   try {
-    if (!API_KEY) {
-      return res.status(500).json({ type: "error", value: "OPENROUTER_API_KEY not set" });
+    if (GROQ_KEYS.length === 0) {
+      return res.status(500).json({ type: "error", value: "No keys" });
     }
 
     const { messages, lang } = req.body;
-
     if (!messages || !Array.isArray(messages)) {
       return res.status(400).json({ type: "error", value: "Bad request" });
     }
 
-    const langMap = {
-      "en": "English only.",
-      "ru": "Только русский язык.",
-      "es": "Solo español.",
-      "pt": "Só português.",
-      "fr": "Français seulement.",
-      "de": "Nur Deutsch.",
-      "ja": "日本語のみ。",
-      "zh": "只用中文。",
-      "ko": "한국어만.",
-      "tr": "Sadece Türkçe.",
-      "ar": "عربي فقط."
-    };
-
     const langRule = langMap[lang] || langMap["en"];
 
-    const systemPrompt = `You are Akinator. Guess the character by asking yes/no questions.
-Language: ${langRule}
-Rules:
-- ONE question per turn
-- QUESTION:text — to ask
-- GUESS:name — to guess
-- Output ONLY one line. Nothing else
-- Only REAL characters. NEVER invent
-- 80%+ sure before guessing
-- Wrong guess = keep asking
-Known: Anime(Naruto,OnePiece,BlueLock:Isagi/Rin/Nagi/Bachira/Chigiri/Barou,AOT,DemonSlayer,JJK,MHA,DeathNote,Bleach,HxH,SpyxFamily,ChainsawMan), Games(Minecraft,Roblox,GTA,Fortnite,FNAF,Genshin,BrawlStars), Movies(Marvel,DC,HarryPotter,StarWars,Disney,Pixar,SpongeBob,GravityFalls), RussianCartoons(Барбоскины:Роза/Лиза/Гена/Дружок/Малыш,МашаИМедведь,Смешарики:Крош/Ёжик/Нюша/Бараш/Копатыч/Лосяш,Фиксики:Нолик/Симка,Лунтик,ТриКота:Коржик/Компот/Карамелька,Простоквашино:Матроскин/Шарик/ДядяФёдор,Чебурашка,НуПогоди), RealPeople`;
+    // ИИ сам думает — никаких списков персонажей
+    const systemPrompt = `You are Akinator, the legendary web genie who can guess ANY character ever created or existed.
+
+${langRule}
+
+You have VAST knowledge of:
+- ALL anime and manga characters ever created
+- ALL cartoon characters from every country
+- ALL movie and TV show characters
+- ALL video game characters
+- ALL book and comic characters
+- ALL real people (celebrities, athletes, politicians, YouTubers, streamers)
+- ALL internet memes and fictional characters
+- Characters from Russian, American, Japanese, Korean, Chinese, European media
+
+YOUR STRATEGY:
+1. Start VERY broad: Is the character real or fictional?
+2. Then medium: What type of media? What country/culture?
+3. Then narrow: What specific show/game/movie? What role?
+4. Then specific: Appearance, abilities, relationships
+5. Make your guess when confident
+
+ABSOLUTE RULES:
+- Ask ONE yes/no question per turn
+- Format: QUESTION:your question here
+- When guessing: GUESS:Full Character Name
+- Output ONLY one line. NOTHING else. No explanations.
+- NEVER invent fake characters
+- Be at least 80% confident before guessing
+- If your guess is wrong, ask MORE questions, think HARDER
+- You are extremely smart and knowledgeable`;
 
     const allMessages = [
       { role: "system", content: systemPrompt },
       ...messages
     ];
 
-    // Сначала рабочую модель, потом остальные
-    const order = workingModel
-      ? [workingModel, ...MODELS.filter(m => m !== workingModel)]
-      : [...MODELS];
-
-    for (let i = 0; i < order.length; i++) {
-      const model = order[i];
-      console.log(`[${i+1}/${order.length}] ${model}`);
-
+    for (let i = 0; i < GROQ_KEYS.length; i++) {
+      const key = getKey();
       try {
-        const response = await callModel(model, allMessages);
+        const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${key}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            model: "gemma2-9b-it",
+            messages: allMessages,
+            temperature: 0.15,
+            max_tokens: 80
+          })
+        });
+
+        if (response.status === 429) { console.log(`Key ${i+1} limited`); continue; }
+
         const text = await response.text();
-        console.log(`Status: ${response.status}`);
+        if (response.status !== 200) { console.log(`Error ${response.status}`); continue; }
 
-        if (response.status !== 200) {
-          console.log(`❌ ${response.status}: ${text.substring(0, 100)}`);
-          if (model === workingModel) workingModel = null;
-          continue;
-        }
-
-        let data;
-        try { data = JSON.parse(text); } catch {
-          console.log("JSON fail"); continue;
-        }
-
-        if (!data.choices?.[0]?.message?.content) {
-          console.log("Empty"); continue;
-        }
+        const data = JSON.parse(text);
+        if (!data.choices?.[0]?.message?.content) continue;
 
         const reply = data.choices[0].message.content.trim();
-        console.log("✅", reply);
-
-        if (reply.length < 3) continue;
-
-        workingModel = model;
+        console.log("AI:", reply);
 
         let result = {};
         const gm = reply.match(/GUESS:\s*(.+)/i);
@@ -148,23 +164,17 @@ Known: Anime(Naruto,OnePiece,BlueLock:Isagi/Rin/Nagi/Bachira/Chigiri/Barou,AOT,D
         }
 
         return res.json(result);
-
-      } catch (err) {
-        console.log(`❌ ${model}: ${err.message}`);
-        if (model === workingModel) workingModel = null;
+      } catch(err) {
+        console.log(`Key ${i+1} error:`, err.message);
       }
     }
 
-    return res.status(503).json({ type: "error", value: "All models unavailable" });
-
-  } catch (error) {
+    return res.status(429).json({ type: "error", value: "rate_limit" });
+  } catch(error) {
     console.error("Error:", error.message);
     res.status(500).json({ type: "error", value: error.message });
   }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Akinator on port ${PORT}`);
-  console.log(`Models: ${MODELS.join(', ')}`);
-});
+app.listen(PORT, () => console.log(`Akinator v8.0 on port ${PORT}`));
